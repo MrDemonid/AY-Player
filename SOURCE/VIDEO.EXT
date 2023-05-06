@@ -1,0 +1,119 @@
+DECLARE WINDOW LITERALLY 'STRUCTURE (
+  NameLen  BYTE,
+  Name(12) BYTE,
+  x        BYTE,
+  y        BYTE,
+  Width    BYTE,
+  Height   BYTE,
+  CurX     BYTE,
+  CurY     BYTE)';
+
+
+VInit: PROC EXTERNAL;
+END VInit;
+
+VDone: PROC EXTERNAL;
+END VDone;
+
+
+
+
+Set$CC: PROC (GROUP, COLOR) EXTERNAL;
+    DECLARE GROUP BYTE,
+            COLOR BYTE;
+END Set$CC;
+
+Set$Col: PROC (GROUP, COLOR) EXTERNAL;
+    DECLARE GROUP BYTE,
+            COLOR BYTE;
+END Set$Col;
+
+Set$Pal: PROC (PAL$PTR) EXTERNAL;
+    DECLARE PAL$PTR ADDRESS;
+END Set$Pal;
+
+
+Cls: PROC EXTERNAL;
+END Cls;
+
+Set$Chr: PROC (Bit$Map, Char) EXTERNAL;
+    DECLARE Bit$Map ADDRESS,
+            Char BYTE;
+end Set$Chr;
+
+Inv$Str: PROC (pStr, LenStr, FirstChar) EXTERNAL;
+    DECLARE pStr ADDRESS,
+            LenStr BYTE,
+            FirstChar BYTE;
+END Inv$Str;
+
+Img$Str: PROC (pStr, LenStr, FirstChar) EXTERNAL;
+    DECLARE pStr ADDRESS,
+            LenStr BYTE,
+            FirstChar BYTE;
+END Img$Str;
+
+
+W$Show: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$Show;
+
+W$Frame: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END;
+
+W$Clear: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$Clear;
+
+W$MovUp: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$MovUp;
+
+W$ClrLn: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$ClrLn;
+
+W$Goto: PROC (Wnd, x, y) EXTERNAL;
+    DECLARE Wnd ADDRESS,
+            (x,y) BYTE;
+END W$Goto;
+
+W$Char: PROC (Wnd, Char) EXTERNAL;
+    DECLARE Wnd ADDRESS,
+            Char BYTE;
+END W$Char;
+
+W$Print: PROC (Wnd, Text) EXTERNAL;
+    DECLARE (Wnd, Text) ADDRESS;
+END W$Print;
+
+W$PutFN: proc (Wnd, FName) EXTERNAL;
+    DECLARE (Wnd, FName) ADDRESS;
+end W$PutFN;
+
+W$Width: PROC (Wnd) BYTE EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$Width;
+
+W$Heigh: PROC (Wnd) BYTE EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END W$Heigh;
+
+
+WC$Show: PROC (Wnd, Line) EXTERNAL;
+    DECLARE Wnd ADDRESS,
+            Line BYTE;
+END WC$Show;
+
+WC$Hide: PROC (Wnd) EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END WC$Hide;
+
+WC$Addr: PROC (Wnd) ADDRESS EXTERNAL;
+    DECLARE Wnd ADDRESS;
+END WC$Addr;
+
+
+
+

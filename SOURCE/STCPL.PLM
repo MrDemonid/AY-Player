@@ -1,0 +1,1029 @@
+/*****************************************************************************
+ *                                                                           *
+ * CP/M AY Player .STC music files ver. 1.2, for PK8000                      *
+ * Copyright (C) 2017 Andrey Hlus                                            *
+ *                                                                           *
+ *****************************************************************************/
+EXCPM: DO;
+
+$CODE
+
+$INCLUDE(:F1:COMMON.LIT)
+$INCLUDE(:F1:CPM.LIT)
+$INCLUDE(:F1:VIDEO.EXT)
+$INCLUDE(:F1:STPLAY.EXT)
+$INCLUDE(:F1:KEYB.EXT)
+$INCLUDE(:F1:UTIL.EXT)
+
+/* формируем переход на начало кода */
+DECLARE JUMP BYTE DATA(0C3h);
+/*DECLARE JADR ADDRESS DATA(.MYENTRY-3); /* with stack initialize */
+DECLARE JADR ADDRESS DATA(.MYENTRY); /* skip stack initialize, use default stack */
+
+/*DECLARE VERSION(*) BYTE DATA('1.2',0);*/
+DECLARE COPYRIGHT(*) BYTE DATA('StcPlay 1.2',0);
+
+/*
+  1.2 +добавил ввод имени файла при сохранении листинга
+      !усовершенствовал драйвер клавиатуры
+  1.1 *исправил баг со строкой эквалайзера
+      *исправил баг с удалением файла из плейлиста
+      *исправил баг с проигрыванием пустых списков
+      *исправил еще несколько мелочей
+      !изменил внутренние структуры для упрощения кода
+      !перенес часть кода на ассемблер, для уменьшения размера
+      +добавил поддержку user-областей
+  1.0 релиз
+*/
+
+/*****************************************************************************
+*
+*                         СТРУКТУРЫ И КОНСТАНТЫ
+*
+******************************************************************************/
+
+DECLARE
+  Top$Mem     LIT '8800h',
+  User$Addr   LIT '8800h',      /* адрес списка user-областей */
+  User$Size   LIT '100h',       /* и его размер (16 элементов) */
+  List$Addr   LIT '8900h',      /* адрес для списка файлов LST */
+  List$Size   LIT '600h',       /* и его размер на 96 элементов */
+  File$Addr   LIT '08F00h',     /* адрес списка файлов текущего диска */
+  File$Size   LIT '2000h',      /* и его размер на 512 элементов */
+  Play$Addr   LIT '0AF00h',     /* адрес плэйлиста */
+  Play$Size   LIT '1000h',      /* и его размер на 256 элементов*/
+  Disk$Addr   LIT '0BF00h',     /* адрес списка дисков */
+  Disk$Size   LIT '100h',       /* и его размер (16 элементов) */
+
+  Rec$Len     LIT '16';         /* размер записи в списке файлов */
+
+
+/*
+  структура отображаемого в окне списка файлов
+  поле Win$Ptr должно быть последним, для совместимости со старыми плейлистами
+*/
+DECLARE
+  WINLIST LITERALLY 'STRUCTURE (
+    Text$Ptr ADDRESS,
+    Top      WORD,
+    Sel      WORD,
+    Num      WORD,
+    Max      WORD,
+    Free$Ptr ADDRESS,
+    Wnd$Ptr  ADDRESS)';
+
+DECLARE
+  SIZELIST LIT '14';            /* размер структуры WINLIST */
+
+
+/*****************************************************************************
+*
+*                                 DATA
+*
+******************************************************************************/
+
+DECLARE
+  stcMask(*)  BYTE DATA ('????????STC'),
+  lstMask(*)  BYTE DATA ('????????PFL');
+
+DECLARE
+  FWnd WINDOW DATA (0, 'zdes moget  ',1 ,10,14,14,0,0),
+  MWnd WINDOW DATA (0, 'be reklama  ',1,0,30,10,0,0),
+  PWnd WINDOW DATA (9, 'Play list   ',17,10,14,14,0,0);
+
+DECLARE
+  EqualBar(8) BYTE DATA (00h,00h,3eh,3eh,3eh,3eh,3eh,00h);
+
+/* Текст справки по клавишам */
+DECLARE
+  S$KEYS(*)   BYTE DATA ('ESCNTRPABMDWLU'),
+  S$FKCHR     LIT '90h',
+  S$ESC       LIT '90h,91h,92h',
+  S$ENTER     LIT '90h,93h,94h,90h,95h',
+  S$SPACE     LIT '91h,96h,97h,92h,90h',
+  S$TAB       LIT '94h,97h,98h',
+  S$CN        LIT '93h',
+  S$CS        LIT '91h',
+  S$CP        LIT '96h',
+  S$CM        LIT '99h',
+  S$CDU       LIT '9Ah,2Fh,9Dh',
+  S$WL        LIT '9Bh,2Fh,9Ch';
+
+
+DECLARE
+  szHelp(*)   BYTE DATA (S$ESC,'   exit/stop play',13,10,
+                  S$ENTER,' play file/list',13,10,
+                  S$WL, '   write/load list',13,10,
+                  S$SPACE,' add/remove list',13,10,
+                  S$TAB,'   switch window',13,10,
+                  S$CDU,'   change drive/user',13,10,
+                  S$CN,' next track ',16h,S$CS,'     stop',13,10,
+                  S$CP,' prev track ',16h,S$SPACE,' replay',13,10,
+                  0);
+
+
+/*                  ' ',17h,17h,17h,17h,17h,17h,17h,17h,' play mode',17h,17h,17h,17h,17h,17h,17h,17h,13,10, */
+
+/* Текст строки состояния эквалайзера */
+DECLARE
+  S$EQUAL(*)  BYTE DATA (9Dh,'POS',9Dh,'PAT'),
+  S$FQCHR     LIT '0B8h',
+  S$POS       LIT '0B8h,0B9h,0BAh,0BBh',
+  S$PAT       LIT '0BCh,0BDh,0BEh,0BFh';
+DECLARE
+  szStat(*)   BYTE DATA(S$POS,' 000/000',S$PAT,' 00', 0);
+
+/* имя проигрываемого файла в строке состояния эквалайзера */
+DECLARE
+  S$QFCHR     LIT '88h',
+  szQFName(*) BYTE DATA (88h,89h,8Ah,8Bh,8Ch,8Dh,8Eh,8Fh);
+
+DECLARE
+  File$Text(6) BYTE,
+  szEmptyN(12) BYTE;
+
+
+DECLARE
+  File$List   WINLIST,          /* список всех файлов */
+  Play$List   WINLIST,          /* список файлов в плэйлисте */
+  Disk$List   WINLIST,          /* список имеющихся в системе дисков */
+  User$List   WINLIST;          /* список user-областей */
+
+
+DECLARE
+  List$Tab(*) ADDRESS DATA (.File$List, .Play$List);
+
+DECLARE
+  FMem$Ptr    ADDRESS,          /* адрес свободной памяти */
+  FMem$Size   WORD;             /* и ее размер */
+
+
+DECLARE
+  Vid$Equal$Ptr ADDRESS,        /* адрес видеопамяти под эквалайзер */
+  Vid$Stat$Ptr  ADDRESS;        /* адрес видеопамяти под строку состояния */
+
+DECLARE
+  StartDrive    BYTE,           /* диск запуска программы: 0 - A, 1 - B, etc. */
+  StartUser     BYTE;           /* user-область запуска программы */
+
+
+
+
+/*****************************************************************************
+*
+*                               UTILITIES
+*
+******************************************************************************/
+
+/*
+  Меняет заголовок окна
+*/
+
+W$SetName: proc (Wnd$Ptr, Name$Ptr);
+    DECLARE
+        Wnd$Ptr ADDRESS,
+        Name$Ptr ADDRESS,
+        Ofs ADDRESS,
+        Wnd BASED Wnd$Ptr WINDOW;
+    Wnd.NameLen = strlen(Name$Ptr);
+    Ofs = strcpy(Name$Ptr, .Wnd.Name);
+    call W$Frame(Wnd$Ptr);
+end W$SetName;
+
+
+
+/*****************************************************************************
+*
+*                                 FILE
+*
+******************************************************************************/
+
+
+list$Init: PROC (Win$Ptr, Lst$Ptr, Addr, Size);
+    DECLARE
+        Win$Ptr ADDRESS,
+        Lst$Ptr ADDRESS,
+        Addr ADDRESS,
+        Size WORD,
+        List BASED Lst$Ptr WINLIST;
+    List.Top = 0;
+    List.Sel = 0;
+    List.Num = 0;
+    List.Max = Size / Rec$Len;
+    List.Text$Ptr = Addr;
+    List.Free$Ptr = Addr;
+    List.Wnd$Ptr = Win$Ptr;
+END list$Init;
+
+
+/*
+  Добавляет запись в список (используя текущий диск и user)
+  на входе:
+    Lst$Ptr - адрес списка
+    Str$Ptr - [0]    : номер дисковода + номер user-области (старшие 4 бита)
+              [1..11]: имя файла в формате CP/M (11 байт)
+*/
+list$Insert: proc (Lst$Ptr, Str$Ptr);
+    DECLARE
+        Lst$Ptr ADDRESS,
+        Str$Ptr ADDRESS,
+        Lst BASED Lst$Ptr WINLIST,
+        Free$Ptr ADDRESS,
+        Disk BASED Free$Ptr BYTE;
+
+    if Lst.Num >= Lst.Max then
+        return;
+    call memcpy(Str$Ptr, Free$Ptr := Lst.Free$Ptr, 12);
+    call memset(Free$Ptr+12, Rec$Len-12, 0);
+    Disk = CurDrive;
+    Lst.Num = Lst.Num + 1;
+    Lst.Free$Ptr = Lst.Free$Ptr + Rec$Len;
+end list$Insert;
+
+
+/*
+  Создание списка дисков
+  на входе:
+    Lst$Ptr - адрес списка
+*/
+Create$Disk: PROC;
+    DECLARE
+        oldDsk BYTE,
+        I BYTE;
+
+    call memset(.szEmptyN(0), LENGTH(szEmptyN), 20h);
+    call list$Init(.FWnd, .Disk$List, Disk$Addr, Disk$Size);
+    oldDsk = CurDrive and 0Fh;   /* узнаем текущий диск */
+    I = 0;
+    do while I < (Disk$Size / Rec$Len);
+        if SEL$DRV(I) > 0 then
+            do;
+                szEmptyN(1) = I + 'A';
+                call list$Insert(.Disk$List, .szEmptyN(0));
+            end;
+        I = I + 1;
+    end;
+    oldDsk = SEL$DRV(oldDsk);
+END Create$Disk;
+
+/*
+  Создание списка user-областей
+*/
+Create$Users: PROC;
+    DECLARE
+        Len BYTE,
+        I BYTE,
+        pSrc ADDRESS,
+        Src BASED pSrc BYTE;
+
+    /*  не нужно, вызов Create$Disk очищает szEmptyZ
+    call memset(.szEmptyN(0), LENGTH(szEmptyN), 20h);
+    */
+    call list$Init(.FWnd, .User$List, User$Addr, User$Size);
+    call memcpy(.('User '), .szEmptyN(1), 5);
+
+    do I = 0 to 15;
+        if (i < 10) then
+            Len = 1;
+        else
+            Len = 2;
+        call memcpy(utoa(I), .szEmptyN(6), Len);
+        call list$Insert(.User$List, .szEmptyN);
+    end;
+END Create$Users;
+
+
+/*
+  Создание списка файлов на текущем диске
+  на входе:
+    Lst$Ptr - адрес под список файлов
+    Mask$Ptr - маска поиска файлов
+*/
+Create$List: PROC (Lst$Ptr, Mask$Ptr);
+    DECLARE
+        Lst$Ptr ADDRESS,
+        Mask$Ptr ADDRESS,
+        pSrc ADDRESS,
+        Drive BASED pSrc BYTE;
+
+    pSrc = Do$Find(0, Mask$Ptr);
+    do while (pSrc <> 0);
+        Drive = CurDrive;
+        call list$Insert(Lst$Ptr, pSrc);
+        pSrc = Nx$Find;
+    end;
+END Create$List;
+
+
+/*
+  Полная перерисовка в окне списка файлов
+*/
+list$Show: PROC (Lst$Ptr);
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        Name$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST,
+        i WORD,
+        y BYTE;
+
+    Wnd = List.Wnd$Ptr;
+    Name$Ptr = List.Text$Ptr+(List.Top*Rec$Len)+1;
+    y = 0;
+    do i = List.Top to List.Top+W$Heigh(Wnd)-1;
+        call W$Goto(Wnd, 0 , y);
+        if i < List.Num then
+            do;
+                call W$PutFN(Wnd, Name$Ptr);
+                Name$Ptr = Name$Ptr + Rec$Len;
+            end;
+        else
+            call W$ClrLn(Wnd);
+        y = y + 1;
+    end;
+END list$Show;
+
+
+/*
+  Перемещение курсора вверх на строку
+*/
+list$Up: PROC (Lst$Ptr);
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST;
+
+    if List.Sel = 0 then
+        return;
+    Wnd = List.Wnd$Ptr;
+    call WC$Hide(Wnd);
+    if List.Sel > List.Top then
+        do;
+            /* просто перерисовываем курсор */
+            List.Sel = List.Sel - 1;
+        end;
+    else if List.Top > 0 then
+        do;
+            /* полностью перерисовываем окно */
+            List.Top = List.Top - 1;
+            List.Sel = List.Sel - 1;
+            call list$Show(Lst$Ptr);
+        end;
+    call WC$Show(Wnd, List.Sel-List.Top);
+END list$Up;
+
+/*
+  Перемещение курсора вверх на страницу
+*/
+list$PageUp: PROC (Lst$Ptr);
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST;
+
+    if List.Sel = 0 then
+        return;
+    Wnd = List.Wnd$Ptr;
+    call WC$Hide(Wnd);
+    if List.Top = 0 then
+        do;
+            /* просто перерисовываем курсор */
+            List.Sel = 0;
+        end;
+    else
+        do;
+            /* полностью перерисовываем окно */
+            if List.Sel >= W$Heigh(Wnd) then
+                List.Sel = List.Sel - W$Heigh(Wnd);
+            else
+                List.Sel = 0;
+            List.Top = List.Sel;
+            call list$Show(Lst$Ptr);
+        end;
+    call WC$Show(Wnd, List.Sel-List.Top);
+END list$PageUp;
+
+
+/*
+  перемещение курсора вниз на строку
+*/
+list$Down: PROC (Lst$Ptr);
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST;
+
+    if (List.Sel+1) >= List.Num then
+        return;
+    Wnd = List.Wnd$Ptr;
+    call WC$Hide(Wnd);
+    if (List.Sel+1) < (List.Top+W$Heigh(Wnd)) then
+        do;
+            /* просто перерисовываем курсор */
+            List.Sel = List.Sel+1;
+        end;
+    else if (List.Top+W$Heigh(Wnd)) < List.Num then
+        do;
+            /* полностью перерисовываем окно */
+            List.Sel = List.Sel + 1;
+            List.Top = List.Top + 1;
+            call list$Show(Lst$Ptr);
+        end;
+    call WC$Show(Wnd, List.Sel-List.Top);
+END list$Down;
+
+/*
+  перемещение курсора вниз на страницу
+*/
+list$PageDown: PROC (Lst$Ptr);
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST,
+        SelNew WORD;
+
+    if (List.Sel+1) >= List.Num then
+        return;
+    Wnd = List.Wnd$Ptr;
+    SelNew = List.Sel + W$Heigh(Wnd);
+    if SelNew >= List.Num then
+        SelNew = List.Num-1;
+    call WC$Hide(Wnd);
+    if SelNew >= (List.Top+W$Heigh(Wnd)) then
+        do;
+            /* придется сдвинуть список */
+            List.Sel = SelNew;
+            List.Top = SelNew - W$Heigh(Wnd) + 1;
+            call list$Show(Lst$Ptr);
+        end;
+    else
+        do;
+            /* просто перерисовываем курсор */
+            List.Sel = SelNew;
+        end;
+    call WC$Show(Wnd, List.Sel-List.Top);
+END list$PageDown;
+
+/*
+  Удаление элемента из списка
+*/
+list$Remove: PROC (Lst$Ptr);
+    DECLARE
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST,
+        Dst$Addr ADDRESS,
+        Size     WORD;
+    if List.Num = 0 then
+        return;
+    Dst$Addr = List.Text$Ptr + (List.Sel*Rec$Len);
+    Size = (List.Num-List.Sel-1) * Rec$Len;
+    if Size > 0 then
+        call memcpy(Dst$Addr+Rec$Len, Dst$Addr, Size);
+    List.Num = List.Num-1;
+    if (List.Num > 0) and (List.Sel >= List.Num) then
+        do;
+            List.Sel = List.Sel - 1;
+            if List.Sel < List.Top then
+                List.Top = List.Top - 1;
+        end;
+    List.Free$Ptr = List.Free$Ptr - Rec$Len;
+END list$Remove;
+
+
+list$Select: PROC (Lst$Ptr) BYTE;
+    DECLARE
+        Wnd ADDRESS,
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST,
+        c BYTE;
+
+    Wnd = List.Wnd$Ptr;
+    call list$Show(Lst$Ptr);
+    call WC$Show(Wnd, List.Sel-List.Top);
+    do while 1;
+        c = GetCh;
+        if c = KEY$UP then
+            call list$Up(Lst$Ptr);
+        else if c = KEY$DOWN then
+            call list$Down(Lst$Ptr);
+        else if c = KEY$PgUP or c = KEY$LEFT then
+            call list$PageUp(Lst$Ptr);
+        else if c = KEY$PgDOWN or c = KEY$RIGHT then
+            call list$PageDown(Lst$Ptr);
+        else if c = KEY$ENTER then
+            return c;
+        else
+            do;
+                call WC$Hide(Wnd);
+                return c;
+            end;
+    end;
+END list$Select;
+
+
+
+/*
+  Загружает файл под курсором на адрес FMem$Ptr
+*/
+File$Read: PROC (Lst$Rec) BYTE;
+    DECLARE
+        Lst$Rec ADDRESS,
+        oldDrv BYTE,
+        nDrive BASED Lst$Rec BYTE,
+        Result BYTE;
+
+    oldDrv = CurDrive;
+
+    call Set$Usr(shr(nDrive, 4));
+    if (Result := fOpen(nDrive and 0Fh, Lst$Rec+1)) <> 0FFh then
+        do;
+            Result = fRead (FMem$Ptr, FMem$Size);
+            call fClose;
+        end;
+    else
+        Result = 0;
+    call Set$Drv(oldDrv and 0Fh);
+    call Set$Usr(shr(oldDrv, 4));
+    return Result;
+end;
+
+
+/*
+  Вывод справки
+*/
+Do$Help: PROC (Wnd);
+    DECLARE
+        Wnd ADDRESS;
+    call W$SetName(Wnd, .COPYRIGHT);
+    call W$Clear(Wnd);
+    call W$Print(Wnd, .szHelp);
+END Do$Help;
+
+
+
+/*
+  Перерисовка эквалайзера
+*/
+Draw$Equal: PROC;
+    DECLARE
+        Ofs ADDRESS;
+    call Put$Eql(Vid$Equal$Ptr);
+    /* готовим данные для строки состояния */
+    call memset(.szStat+5, 7, 20h);
+    call memset(.szStat+17, 2, 20h);
+    Ofs = strcpy(utoa(curOrd), .szStat+5);
+    call memset(Ofs, 1, '/');
+    Ofs = Ofs + 1;
+    Ofs = strcpy(utoa(lenOrd), Ofs);
+    Ofs = strcpy(utoa(patNum), .szStat+17);
+    /* обновляем строку состояния на экране */
+    call memcpy(.szStat, Vid$Stat$Ptr, LENGTH(szStat)-1);
+END Draw$Equal;
+
+Init$Equal: PROC (FName$Ptr);
+    DECLARE
+        FName$Ptr ADDRESS;
+    call W$SetName(.MWnd, .('Equalizer',0));
+    call W$Clear(.MWnd);
+    /* выводим имя проигрываемого файла */
+    call Img$Str(FName$Ptr, 8, S$QFCHR);
+    call memcpy(.szQFName, Vid$Stat$Ptr-9, LENGTH(szQFName));
+END Init$Equal;
+
+
+Do$Play: PROC (Lst$Ptr);
+    DECLARE
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST;
+    call Init$Equal(List.Text$Ptr + (List.Sel*Rec$Len)+1);
+    call ST$Init(FMem$Ptr);
+END Do$Play;
+
+List$Num$Items: proc(Lst$Ptr) WORD;
+    declare
+        Lst$Ptr ADDRESS,
+        List BASED Lst$Ptr WINLIST;
+    return List.Num;
+end List$Num$Items;
+
+/*
+  Проигрывание списка файлов
+*/
+Do$Play$List: PROC (Lst$Ptr, Auto);
+    DECLARE
+        Lst$Ptr ADDRESS,
+        Auto BYTE,
+        List BASED Lst$Ptr WINLIST,
+        IsBreak BYTE,
+        Key BYTE;
+
+    /* меняем цвет курсора */
+    call Set$CC(20, 50h);
+
+    IsBreak = 0;
+    do while IsBreak = 0;
+        /* цикл проигрывания плейлиста */
+        if File$Read(List.Text$Ptr + (List.Sel*Rec$Len)) > 0 then
+            do;
+                call Do$Play(Lst$Ptr);
+
+                do while ((PLFLAG and 1) = 0) and (IsBreak = 0);
+                    /* цикл проигрывания мелодии */
+                    call Draw$Equal;
+                    if KbHit <> 0 then do;
+                        Key = Getch;
+                        if (Key = KEY$ESC) or (Key = KEY$S) then
+                            do;
+                                Auto = 0;
+                                goto StopSong;
+                            end;
+                        else if Key = KEY$SPACE then
+                            do;
+                                call ST$Stop;
+                                call Do$Play(Lst$Ptr);
+                            end;
+                        else if Auto <> 0 then
+                            do;
+                                if Key = KEY$P then
+                                    do;
+                                        call ST$Stop;
+                                        call list$Up(Lst$Ptr);
+                                        goto NextSong;
+                                    end;
+                                else if Key = KEY$N then
+                                        goto StopSong;
+                            end;
+                    end;
+                end; /* while */
+
+              StopSong:
+                call ST$Stop;
+                if Auto <> 0 then
+                    call list$Down(Lst$Ptr);
+                else
+                    IsBreak = 1;
+
+              NextSong:
+            end; /* file read */
+        else do;
+            /* произошла ошибка чтения файла, пробуем перейти к следующему */
+            if (List.Sel+1) >= List.Num then
+                IsBreak = 1;
+            else
+                call list$Down(Lst$Ptr);
+        end;
+    end; /* while */
+
+    /* восстанавливаем цвет курсора */
+    call Set$CC(20, 13);
+    /* и панель помощи */
+    call Do$Help(.MWnd);
+END Do$Play$List;
+
+
+/*
+  Генерация имени окна со списком файлов на теукщем диске
+*/
+Gen$DiskName: proc;
+    DECLARE
+        Str$Ptr ADDRESS,
+        Char BASED Str$Ptr BYTE,
+        Ofs ADDRESS;
+    File$Text(0) = (CurDrive and 0Fh) + 'A';
+    File$Text(1) = ':';
+    File$Text(2) = '\';
+    Ofs = strcpy(utoa(shr(CurDrive,4)), .File$Text(3));
+end Gen$DiskName;
+
+Make$Wnd$List: proc;
+    call list$Init(.FWnd, .File$List, File$Addr, File$Size);
+    call Create$List(.File$List, .stcMask);
+    call Gen$DiskName;            /* генерируем новое имя окна */
+end;
+
+Set$Disk: proc (nDrive);
+    declare
+        nDrive byte;
+    call Set$Drv(nDrive);
+    call Make$Wnd$List;
+end Set$Disk;
+
+Set$User: proc (nUser);
+    declare
+        nUser byte;
+    call Set$Usr(nUser);
+    call Make$Wnd$List;
+end Set$User;
+
+Upd$Wnd$File: proc;
+    call W$SetName(.FWnd, .File$Text);
+    call list$Show(.File$List);
+end Upd$Wnd$File;
+
+/*
+  Выбор активного диска
+*/
+Do$Disk: PROC;
+    DECLARE
+        Key BYTE,
+        IsBreak BYTE;
+
+    if Disk$List.Num = 0 then
+        return;
+    call W$SetName(.FWnd, .('Change Disk',0));
+    IsBreak = 0;
+    do while IsBreak = 0;
+        Key = list$Select(.Disk$List);
+        if Key = KEY$ENTER then
+            do;
+                call Set$Disk(Disk$List.Sel);
+                IsBreak = 1;
+            end;
+        else if Key = KEY$ESC then
+            do;
+                IsBreak = 1;
+            end;
+    end;
+    call Upd$Wnd$File;
+END Do$Disk;
+
+
+Do$User: PROC;
+    DECLARE
+        Usr$Ptr ADDRESS,
+        User BASED Usr$Ptr BYTE,
+        Key BYTE,
+        IsBreak BYTE;
+
+    call W$SetName(.FWnd, .('Change User',0));
+    IsBreak = 0;
+    do while IsBreak = 0;
+        Key = list$Select(.User$List);
+        if Key = KEY$ENTER then
+            do;
+                call Set$User(User$List.Sel);
+                IsBreak = 1;
+            end;
+        else if Key = KEY$ESC then
+            do;
+                IsBreak = 1;
+            end;
+    end;
+    call Upd$Wnd$File;
+END Do$User;
+
+
+
+Input$Name: proc (Buf$Ptr, Max$Len) byte;
+    declare
+        Buf$Ptr address,
+        Max$Len byte,
+        Buf based Buf$Ptr(255) byte,
+        Idx byte,
+        (ch,fch) byte;
+
+
+    call memset(Buf$Ptr, Max$Len, ' ');
+    Idx = 0;
+    do while (ch:= GetCh) <> KEY$ESC;
+        if (fch:=fCheck(ch)) <> 0 then
+            do;
+                if Idx < Max$Len then
+                    do;
+                        /* заносим в буфер символ в верхнем регистре */
+                        call W$Char(.FWnd, fch);
+                        Buf(Idx) = fch;
+                        Idx = Idx + 1;
+                    end;
+            end;
+        else
+            do;
+                if ch = KEY$ENTER then
+                    return Idx;
+                if ch = KEY$BKSPC then
+                    if Idx > 0 then
+                        do;
+                            call W$Char(.FWnd, 8);
+                            Idx = Idx - 1;
+                            Buf(Idx) = ' ';
+                        end;
+            end;
+    end;
+    return 0;
+end Input$Name;
+
+/*
+  Запись файла-листинга
+*/
+Do$Write: PROC;
+    DECLARE
+        pDst ADDRESS,
+        Key BYTE,
+        List WINLIST,
+        IsBreak BYTE,
+        res BYTE,
+        szName(14) BYTE;
+
+    if Play$List.Num = 0 then
+        return;
+    call list$Init(.FWnd, .List, List$Addr, List$Size);
+    call list$Insert(.List, .(0,'<NEW>      '));
+    call Create$List(.List, .lstMask);
+    call W$SetName(.FWnd, .('Write file',0));
+    IsBreak = 0;
+    do while IsBreak = 0;
+        Key = list$Select(.List);
+        if Key = KEY$ESC then
+            IsBreak = 1;
+        else if Key = KEY$ENTER then
+            do;
+                if List.Sel = 0 then
+                    do;
+                        /* создаем новый файл */
+                        call W$Clear(.FWnd);
+                        call W$Print(.FWnd, .('Enter name:',13,10,0));
+                        if Input$Name(.szName, 8) > 0 then
+                            do;
+                                /* добавляем расширение */
+                                call memcpy(.('PFL'), .szName+8, 3);
+                            end;
+                        else
+                            IsBreak = 1;
+
+                    end;
+                else
+                    do;
+                        /* берем файл из списка */
+                        call memcpy(List.Text$Ptr+(List.Sel*Rec$Len)+1,.szName,12);
+                    end;
+
+                if IsBreak = 0 then
+                    do;
+                        if Do$Find(0, .szName) <> 0 then
+                            do;
+                                /*
+                                  файл уже существует, запрашиваем удаление
+                                */
+                                call W$Clear(.FWnd);
+                                call W$Print(.FWnd, .('File exist!',13,10,'Overwrite?',13,10,'Y/N',0));
+                                if (Key:= GetCh) = KEY$Y then
+                                   do;
+                                       call fDel(0, .szName);
+                                   end;
+                                else
+                                    goto donesave;
+                            end;
+                        /* сохраняем список в файл */
+                        if fMake(0, .szName) <> 0FFh then
+                            do;
+                                res = fWrite(.Play$List, SIZELIST);
+                                res = fWrite(Play$List.Text$Ptr, Play$List.Num * Rec$Len);
+                                call fClose;
+                            end;
+                        donesave:
+                    end;
+                IsBreak = 1;
+            end;
+    end;
+    call Upd$Wnd$File;
+end Do$Write;
+
+
+Do$Load: PROC;
+    DECLARE
+        Tmp BASED FMem$Ptr WINLIST,
+        Key BYTE,
+        List WINLIST,
+        IsBreak BYTE;
+
+    call list$Init(.FWnd, .List, List$Addr, List$Size);
+    call Create$List(.List, .lstMask);
+    call W$SetName(.FWnd, .('Load file',0));
+    IsBreak = 0;
+    do while IsBreak = 0;
+        Key = list$Select(.List);
+        if Key = KEY$ESC then
+            IsBreak = 1;
+        else if Key = KEY$ENTER then
+            do;
+                if List.Num > 0 then
+                    if FIle$Read(List.Text$Ptr + (List.Sel*Rec$Len)) > 0 then
+/*                        if (Tmp.Text$Ptr = Play$Addr) and (Tmp.Max = (Play$Size / Rec$Len)) and (Tmp.Num < Tmp.Max) then*/
+                      if Tmp.Text$Ptr = Play$Addr then
+                        if Tmp.Max = (Play$Size / Rec$Len) then
+                          if Tmp.Num < Tmp.Max then
+                            do;
+                                /* копируем не затрагивая поля .Win$Ptr! */
+                                call memcpy(FMem$Ptr, .Play$List, SIZELIST-2);
+                                call memcpy(FMem$Ptr+128, Play$Addr, Tmp.Num*Rec$Len);
+                                call list$Show(.Play$List);
+                            end;
+                IsBreak = 1;
+            end;
+    end;
+    call Upd$Wnd$File;
+END Do$Load;
+
+
+
+UI$Loop: PROC;
+    DECLARE
+        (Mode,IsBreak) BYTE,
+        Key BYTE,
+        Ptr ADDRESS,
+        Lst BASED Ptr WINLIST;
+
+    call Do$Help(.MWnd);
+    Mode = 0;
+    IsBreak = 0;
+    do while IsBreak = 0;
+        Ptr = List$Tab(Mode);
+        Key = list$Select(Ptr);
+        if Key = KEY$ESC then
+            IsBreak = 1;
+        else if Key = KEY$D then
+            call Do$Disk;
+        else if Key = KEY$W then
+            call Do$Write;
+        else if Key = KEY$L then
+            call Do$Load;
+        else if Key = KEY$TAB then
+            Mode = Mode xor 1;
+        else if Key = KEY$U then
+            call Do$User;
+        else if Lst.Num <> 0 then
+            do;
+
+                if Key = KEY$ENTER then
+                    call Do$Play$List(Ptr, Mode);
+
+                else if Key = KEY$SPACE then
+                    if Mode <> 0 then
+                        do;
+                            call list$Remove(.Play$List);
+                            call list$Show(.Play$List);
+                        end;
+                    else
+                        /* добавляем файл в плэй-лист */
+                        do;
+                            call list$Insert(.Play$List, File$List.Text$Ptr + (File$List.Sel*Rec$Len));
+                            call list$Show(.Play$List);
+                        end;
+            end;
+    end;
+END UI$Loop;
+
+
+
+
+
+
+
+Init$Var: PROC;
+    /* сохраняем начальные дисковод и user */
+    StartDrive = MON3(19h);
+    StartUser = Get$Usr;
+    CurDrive = SHL(StartUser, 4) or StartDrive;
+    /* инициализируем память */
+    FMem$Ptr = .MEMORY;
+    FMem$Size = Top$Mem-FMem$Ptr;
+    /* и получаем адреса видеопамяти */
+    call W$Goto(.MWnd, (W$Width(.MWnd)-24)/2, 0);
+    Vid$Equal$Ptr = WC$Addr(.MWnd);
+    call W$Goto(.MWnd, 9, 7);
+    Vid$Stat$Ptr = WC$Addr(.MWnd);
+    /* настраиваем знакогенератор */
+    call Set$Chr(.EqualBar, 0Eh);       /* "кубики" эквалайзера */
+    call Set$Chr(.EqualBar, 06h);
+    call Inv$Str(.S$EQUAL, LENGTH(S$EQUAL), S$FQCHR); /* надписи 'POS' & 'PAT' */
+    call Img$Str(.S$KEYS, LENGTH(S$KEYS), S$FKCHR);   /* надписи для справки */
+    /* инициализируем списки */
+    call list$Init(.PWnd, .Play$List, Play$Addr, Play$Size);
+    call Create$Disk;
+    call Create$Users;
+    call Set$Disk(StartDrive);
+    call Upd$Wnd$File;
+END Init$Var;
+
+
+MYENTRY:
+    call SetIRQ;
+    call VInit;
+    call KbInit;
+    call Init$Var;
+
+    call W$Show(.MWnd);
+    call W$Show(.FWnd);
+    call W$Show(.PWnd);
+
+    call UI$Loop;
+
+    call KbDone;
+    call VDone;
+    call RstIRQ;
+
+    /* Возврат в CP/M */
+    call Boot;
+END EXCPM;
+EOF
+

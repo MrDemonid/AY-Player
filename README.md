@@ -1,2 +1,4 @@
 # AY-Player
-STC file player for Soviet computer ПК8000 (PK8000)
+STC file Player for the Soviet computer ПК8000 (PK8000) with AY controller.
+
+Programming language: PL/M-80.

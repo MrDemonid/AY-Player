@@ -1,0 +1,40 @@
+DECLARE KEY$ESC    LITERALLY '0BAh',
+        KEY$ENTER  LITERALLY '0BFh',
+        KEY$TAB    LITERALLY '0BBh',
+        KEY$BKSPC  LITERALLY '0BDh',
+        KEY$LEFT   LITERALLY '0C4h',
+        KEY$UP     LITERALLY '0C5h',
+        KEY$DOWN   LITERALLY '0C6h',
+        KEY$RIGHT  LITERALLY '0C7h',
+        KEY$PgUP   LITERALLY '0CEh',
+        KEY$PgDOWN LITERALLY '0CDh',
+        KEY$F1     LITERALLY '0B5h',
+        KEY$F2     LITERALLY '0B6h',
+        KEY$F3     LITERALLY '0B7h',
+        KEY$F4     LITERALLY '0B8h',
+        KEY$F5     LITERALLY '0B9h',
+
+        KEY$SPACE  LITERALLY ''' ''',
+        KEY$D      LITERALLY '''D''',
+        KEY$L      LITERALLY '''L''',
+        KEY$N      LITERALLY '''N''',
+        KEY$P      LITERALLY '''P''',
+        KEY$R      LITERALLY '''R''',
+        KEY$S      LITERALLY '''S''',
+        KEY$U      LITERALLY '''U''',
+        KEY$W      LITERALLY '''W''',
+        KEY$Y      LITERALLY '''Y''';
+
+
+
+KbInit: PROC EXTERNAL;
+END KbInit;
+
+KbDone: PROC EXTERNAL;
+END KbDone;
+
+KbHit: PROC BYTE EXTERNAL;
+END KbHit;
+
+GetCh: PROC BYTE EXTERNAL;
+END GetCh;
